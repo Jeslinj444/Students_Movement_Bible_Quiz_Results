@@ -19,7 +19,7 @@ const SCROLL_SPEED = 0.75; // Pixels per frame (lower = slower, butter-smooth)
 const $ = (id) => document.getElementById(id);
 
 /* -------------------------------------------------------------
- * 2. SANITIZATION & METRICS
+ * 2. SANITIZATION, METRICS & EXPRESSION PARSER
  * ----------------------------------------------------------- */
 function esc(str) {
   return String(str ?? "").replace(/[&<>"']/g, c => ({
@@ -37,6 +37,29 @@ function notify(id, text, isOk = true) {
   el.className = `alert-box ${isOk ? 'alert-success' : 'alert-danger'}`;
   el.hidden = false;
   setTimeout(() => { el.hidden = true; }, 4000);
+}
+
+// Evaluates formulas, decimals, and relative modifiers (+, -, *, /)
+function parseScoreMath(expr, baseValue = 0) {
+  let val = String(expr ?? "").trim();
+  if (!val) return 0;
+
+  // Handles relative modifiers like "+10", "-5", "*2", "/2"
+  if (/^[+\-*/]/.test(val)) {
+    val = `${baseValue}${val}`;
+  }
+
+  // Safe arithmetic check: strictly numbers, basic operators, and parens
+  if (!/^[0-9+\-*/().\s]+$/.test(val)) {
+    return baseValue;
+  }
+
+  try {
+    const result = Function(`'use strict'; return (${val})`)();
+    return Number.isFinite(result) ? Math.round(result * 100) / 100 : baseValue;
+  } catch {
+    return baseValue;
+  }
 }
 
 /* -------------------------------------------------------------
@@ -148,9 +171,24 @@ function renderScores(teamId) {
   box.innerHTML = rounds.map(r => `
     <div class="form-group">
       <label>${esc(r.name)}</label>
-      <input type="number" data-r="${esc(r.id)}" value="${Number(team.scores?.[r.id]) || 0}" min="0" step="1">
+      <input type="text" data-r="${esc(r.id)}" value="${Number(team.scores?.[r.id]) || 0}" placeholder="e.g. 10 or +10">
     </div>
   `).join("");
+
+  // Real-time evaluation on blur and Enter key
+  box.querySelectorAll('input[data-r]').forEach(inp => {
+    const calc = () => {
+      const currentVal = Number(team.scores?.[inp.dataset.r]) || 0;
+      inp.value = parseScoreMath(inp.value, currentVal);
+    };
+    inp.addEventListener('blur', calc);
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        calc();
+      }
+    });
+  });
 }
 
 async function sync(newT, newR, msg) {
@@ -176,7 +214,7 @@ $('admin-login-form').onsubmit = async (e) => {
 };
 
 $('logout-btn').onclick = () => supabaseClient.auth.signOut();
-$('close-login-btn').onclick = () => {$('login-modal').hidden = true; };
+$('close-login-btn').onclick = () => { $('login-modal').hidden = true; };
 
 supabaseClient.auth.onAuthStateChange((_, session) => {
   isAdmin = Boolean(session?.user);
@@ -241,7 +279,10 @@ $('save-scores-btn').onclick = async () => {
   
   const updatedScores = { ...team.scores };
   document.querySelectorAll('[data-r]').forEach(inp => {
-    updatedScores[inp.dataset.r] = Number(inp.value) || 0;
+    const currentVal = Number(team.scores?.[inp.dataset.r]) || 0;
+    const finalVal = parseScoreMath(inp.value, currentVal);
+    inp.value = finalVal;
+    updatedScores[inp.dataset.r] = finalVal;
   });
 
   const updatedTeams = teams.map(t => t.id === id ? { ...t, scores: updatedScores } : t);
@@ -325,10 +366,12 @@ $('fullscreen-toggle-btn').onclick = () => {
 // Fullscreen State Listener (Triggers continuous scroll loop automatically)
 document.addEventListener('fullscreenchange', () => {
   if (isFullscreenActive()) {
-    $('fullscreen-toggle-btn').textContent = '×';$('fullscreen-toggle-btn').title = "Exit Fullscreen (Esc)";
+    $('fullscreen-toggle-btn').textContent = '×';
+    $('fullscreen-toggle-btn').title = "Exit Fullscreen (Esc)";
     startAutoScroll();
   } else {
-    $('fullscreen-toggle-btn').textContent = '⛶';$('fullscreen-toggle-btn').title = "Toggle Fullscreen Projector Mode";
+    $('fullscreen-toggle-btn').textContent = '⛶';
+    $('fullscreen-toggle-btn').title = "Toggle Fullscreen Projector Mode";
     stopAutoScroll();
   }
 });
